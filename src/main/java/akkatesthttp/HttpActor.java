@@ -10,6 +10,7 @@ import akka.http.javadsl.Http;
 import akka.http.javadsl.model.HttpRequest;
 import akka.http.javadsl.model.HttpResponse;
 import akka.stream.ActorMaterializer;
+import akka.stream.Materializer;
 import akka.stream.javadsl.Sink;
 import net.minidev.json.JSONObject;
 import net.minidev.json.JSONValue;
@@ -59,15 +60,16 @@ public class HttpActor {
     }
   }
 
-  public static Props props() {
-    return Props.create(HttpActorFSM.class, HttpActorFSM::new);
+  public static Props props(Materializer materializer) {
+    return Props.create(HttpActorFSM.class, materializer);
   }
 
   public static class HttpActorFSM extends AbstractLoggingFSM<AS, Data> {
-    final ActorMaterializer mat = ActorMaterializer.create(context());
 
-    public HttpActorFSM() {
+    private final Materializer materializer;
 
+    public HttpActorFSM(Materializer materializer) {
+      this.materializer = materializer;
       FiniteDuration timeout = new FiniteDuration(10, TimeUnit.SECONDS);
 
       // FSM definition
@@ -95,7 +97,7 @@ public class HttpActor {
           startIndication.num1, startIndication.num2);
 
       Future<HttpResponse> response = Http.get(context().system())
-          .singleRequest(HttpRequest.create(url), mat);
+          .singleRequest(HttpRequest.create(url), materializer);
 
       pipe(response, context().dispatcher()).to(self()); // receive response as a message
 
@@ -107,7 +109,7 @@ public class HttpActor {
 
       // receive response chunks as messages and HttpFinished message signaling the end
       response.entity().getDataBytes().map(byteStr -> new HttpChunk(byteStr.utf8String()))
-          .runWith(Sink.actorRef(self(), new HttpComplete()), mat);
+          .runWith(Sink.actorRef(self(), new HttpComplete()), materializer);
 
       return stay().using(data.update(response));
     }
@@ -137,9 +139,8 @@ public class HttpActor {
         log().error("", e);
         return httpAbort(data);
 
-      } finally {
-        mat.shutdown();
       }
+
     }
 
     private State<AS, Data> onHttpFailure(Status.Failure failure, Data data) {
